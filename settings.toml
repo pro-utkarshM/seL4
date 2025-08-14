@@ -1,0 +1,11 @@
+# File: settings.toml
+
+[build.qemu-riscv-virt]
+# Set the target platform
+platform = "qemu-riscv-virt"
+
+# Set the seL4-specific architecture
+sel4_arch = "riscv64"
+
+# Set the general architecture family
+arch = "riscv"

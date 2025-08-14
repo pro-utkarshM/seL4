@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "bpf_bridge.h": "c",
+        "stddef.h": "c"
+    }
+}

@@ -708,8 +708,73 @@ add_custom_target(kernel_all_pp_wrapper DEPENDS kernel_all_pp.c)
 
 add_custom_target(kernel_theories DEPENDS ${theories_deps})
 
+# ================================ START OF MODIFICATIONS ================================
+
+# --- MicroBPF-Kernel: Rust BPF Engine Integration ---
+#
+# This section adds the necessary logic to build the Rust-based eBPF engine (`rbpf`)
+# and link it into the final kernel binary.
+
+# 1. Add the C bridge header directory to the kernel's include paths.
+#    This allows kernel C code to find and use `bpf_bridge.h`.
+target_include_directories(kernel PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/bpf_bridge
+)
+
+# 2. Define the path to the compiled Rust static library.
+#    NOTE: You MUST update 'riscv64gc-unknown-none-elf' to match your Rust target triple.
+set(RBPF_TARGET_TRIPLE "riscv64gc-unknown-none-elf")
+set(RBPF_STATIC_LIB
+    "${CMAKE_CURRENT_BINARY_DIR}/bpf/target/${RBPF_TARGET_TRIPLE}/release/librbpf.a"
+)
+
+# 3. Define a custom command to build the Rust `rbpf` crate.
+#    This command invokes `cargo build` to produce a `no_std` static library.
+add_custom_command(
+    OUTPUT ${RBPF_STATIC_LIB}
+    COMMAND
+        ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/bpf
+    COMMAND
+        cargo build
+            --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/bpf/Cargo.toml
+            --target ${RBPF_TARGET_TRIPLE}
+            --release
+            --no-default-features
+            --target-dir ${CMAKE_CURRENT_BINARY_DIR}/bpf/target
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bpf
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/bpf/Cargo.toml
+        ${CMAKE_CURRENT_SOURCE_DIR}/bpf/src/lib.rs
+    COMMENT "Building the Rust eBPF engine (rbpf)..."
+)
+
+# 4. Create a custom target to wrap the `cargo build` command.
+#    This gives us a named target that other CMake targets can depend on.
+add_custom_target(
+    rbpf-build
+    DEPENDS ${RBPF_STATIC_LIB}
+)
+
+# 5. Define an IMPORTED library target for our compiled Rust code.
+#    This is the modern CMake way to handle pre-compiled or custom-compiled libraries.
+add_library(rbpf STATIC IMPORTED GLOBAL)
+set_property(
+    TARGET rbpf
+    PROPERTY IMPORTED_LOCATION ${RBPF_STATIC_LIB}
+)
+
+# ================================= END OF MODIFICATIONS =================================
+
 # Declare final kernel output
 add_executable(kernel.elf EXCLUDE_FROM_ALL ${asm_sources} kernel_all.c)
+
+# --- MicroBPF-Kernel MODIFICATION ---
+# Add our C bridge header to the kernel's include path
+target_include_directories(kernel.elf PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/bpf_bridge"
+)
+# ---
+
 target_include_directories(kernel.elf PRIVATE ${config_dir})
 target_include_directories(kernel.elf PRIVATE include)
 target_include_directories(kernel.elf PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -717,6 +782,13 @@ target_link_libraries(kernel.elf PRIVATE kernel_Config kernel_autoconf)
 set_property(TARGET kernel.elf APPEND_STRING PROPERTY LINK_FLAGS " -Wl,-T ${linker_lds_path} ")
 set_target_properties(kernel.elf PROPERTIES LINK_DEPENDS "${linker_lds_path}")
 add_dependencies(kernel.elf circular_includes)
+
+# --- MicroBPF-Kernel MODIFICATION ---
+# Make the kernel target depend on the rbpf build target
+add_dependencies(kernel.elf rbpf-build)
+# Link the kernel against the compiled Rust library
+target_link_libraries(kernel.elf PRIVATE rbpf)
+# ---
 
 # The following commands setup the install target for copying generated files and
 # compilation outputs to an install location: CMAKE_INSTALL_PREFIX.
